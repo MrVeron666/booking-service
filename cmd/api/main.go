@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"time"
+	_ "time/tzdata" // встроенная база часовых поясов (в образе Alpine её нет)
 
 	"github.com/bogdan/booking-service/internal/config"
 	"github.com/bogdan/booking-service/internal/handler"
@@ -51,6 +52,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Часовой пояс бизнеса: рабочие часы задаются в местном времени.
+	tz := os.Getenv("TIMEZONE")
+	if tz == "" {
+		tz = "Asia/Almaty"
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		slog.Error("неизвестный часовой пояс", "tz", tz, "err", err)
+		os.Exit(1)
+	}
+
 	// Собираем слои снизу вверх: repository -> service -> handler.
 	userRepo := repository.NewUserRepository(pool)
 	authService := service.NewAuthService(userRepo, jwtSecret)
@@ -60,6 +72,10 @@ func main() {
 	hoursRepo := repository.NewWorkingHoursRepository(pool)
 	catalogService := service.NewCatalogService(serviceRepo, hoursRepo)
 	catalogHandler := handler.NewCatalogHandler(catalogService)
+
+	bookingRepo := repository.NewBookingRepository(pool)
+	bookingService := service.NewBookingService(serviceRepo, hoursRepo, bookingRepo, loc)
+	bookingHandler := handler.NewBookingHandler(bookingService)
 
 	router := chi.NewRouter()
 	router.Get("/health", handler.HealthHandler{Pool: pool}.ServeHTTP)
@@ -73,11 +89,20 @@ func main() {
 		r.Use(middleware.Auth(authService))
 		r.Get("/me", authHandler.Me)
 
-		// Просмотр услуг доступен любой роли.
+		// Просмотр услуг, слотов и своих записей доступен любой роли.
 		r.Get("/services", catalogHandler.ListServices)
 		r.Get("/services/{id}", catalogHandler.GetService)
+		r.Get("/services/{id}/slots", bookingHandler.ListSlots)
+		r.Get("/bookings", bookingHandler.List)
+		r.Patch("/bookings/{id}/cancel", bookingHandler.Cancel)
 
-		// Изменения доступны только владельцу (owner).
+		// Создавать записи могут только клиенты.
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequireRole("client"))
+			r.Post("/bookings", bookingHandler.Create)
+		})
+
+		// Изменения каталога и графика доступны только владельцу (owner).
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireRole("owner"))
 			r.Post("/services", catalogHandler.CreateService)
