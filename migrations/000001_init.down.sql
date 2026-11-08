@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS bookings;
+DROP TABLE IF EXISTS working_hours;
+DROP TABLE IF EXISTS services;
+DROP TABLE IF EXISTS users;
