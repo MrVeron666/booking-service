@@ -10,6 +10,9 @@ import (
 
 	"github.com/bogdan/booking-service/internal/config"
 	"github.com/bogdan/booking-service/internal/handler"
+	"github.com/bogdan/booking-service/internal/middleware"
+	"github.com/bogdan/booking-service/internal/repository"
+	"github.com/bogdan/booking-service/internal/service"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -41,8 +44,30 @@ func main() {
 	}
 	slog.Info("подключение к PostgreSQL установлено")
 
+	// Секрет для подписи JWT-токенов берём из переменной окружения.
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if len(jwtSecret) < 16 {
+		slog.Error("JWT_SECRET не задан или слишком короткий (минимум 16 символов)")
+		os.Exit(1)
+	}
+
+	// Собираем слои снизу вверх: repository -> service -> handler.
+	userRepo := repository.NewUserRepository(pool)
+	authService := service.NewAuthService(userRepo, jwtSecret)
+	authHandler := handler.NewAuthHandler(authService)
+
 	router := chi.NewRouter()
 	router.Get("/health", handler.HealthHandler{Pool: pool}.ServeHTTP)
+
+	// Открытые маршруты: токен не нужен.
+	router.Post("/auth/register", authHandler.Register)
+	router.Post("/auth/login", authHandler.Login)
+
+	// Маршруты внутри Group доступны только с токеном.
+	router.Group(func(r chi.Router) {
+		r.Use(middleware.Auth(authService))
+		r.Get("/me", authHandler.Me)
+	})
 
 	slog.Info("сервер запускается", "addr", cfg.HTTPAddr)
 	err = http.ListenAndServe(cfg.HTTPAddr, router)
