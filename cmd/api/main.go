@@ -56,6 +56,11 @@ func main() {
 	authService := service.NewAuthService(userRepo, jwtSecret)
 	authHandler := handler.NewAuthHandler(authService)
 
+	serviceRepo := repository.NewServiceRepository(pool)
+	hoursRepo := repository.NewWorkingHoursRepository(pool)
+	catalogService := service.NewCatalogService(serviceRepo, hoursRepo)
+	catalogHandler := handler.NewCatalogHandler(catalogService)
+
 	router := chi.NewRouter()
 	router.Get("/health", handler.HealthHandler{Pool: pool}.ServeHTTP)
 
@@ -67,6 +72,20 @@ func main() {
 	router.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(authService))
 		r.Get("/me", authHandler.Me)
+
+		// Просмотр услуг доступен любой роли.
+		r.Get("/services", catalogHandler.ListServices)
+		r.Get("/services/{id}", catalogHandler.GetService)
+
+		// Изменения доступны только владельцу (owner).
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequireRole("owner"))
+			r.Post("/services", catalogHandler.CreateService)
+			r.Put("/services/{id}", catalogHandler.UpdateService)
+			r.Delete("/services/{id}", catalogHandler.DeleteService)
+			r.Get("/working-hours", catalogHandler.GetWorkingHours)
+			r.Put("/working-hours", catalogHandler.SetWorkingHours)
+		})
 	})
 
 	slog.Info("сервер запускается", "addr", cfg.HTTPAddr)
