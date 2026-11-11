@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Онлайн-запись</title>
+<style>
+  :root {
+    --bg: #f4f6fa; --card: #fff; --text: #1d2433; --muted: #6b7385;
+    --primary: #2f5bea; --primary-dark: #2347c0; --danger: #d64545;
+    --ok: #2a9d5c; --border: #e1e5ee;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--text); line-height: 1.45; }
+  header { background: var(--card); border-bottom: 1px solid var(--border); padding: 12px 20px;
+           display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  header h1 { font-size: 18px; margin: 0; }
+  main { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+          padding: 18px; margin-bottom: 16px; }
+  .card h2 { margin: 0 0 12px; font-size: 16px; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .stack { display: flex; flex-direction: column; gap: 10px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+         flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .row:last-child { border-bottom: none; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+  .service { border: 1px solid var(--border); border-radius: 10px; padding: 12px;
+             display: flex; flex-direction: column; gap: 6px; }
+  .slots { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .field { display: block; margin-bottom: 4px; }
+  input, select { padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px;
+                  font: inherit; background: #fff; }
+  button { padding: 9px 14px; border: none; border-radius: 8px; background: var(--primary);
+           color: #fff; font: inherit; cursor: pointer; }
+  button:hover { background: var(--primary-dark); }
+  button.danger { background: var(--danger); }
+  button.small { padding: 5px 10px; font-size: 14px; }
+  button.slot { background: #fff; color: var(--primary); border: 1px solid var(--primary); }
+  button.slot:hover { background: var(--primary); color: #fff; }
+  .badge { font-size: 13px; padding: 3px 9px; border-radius: 20px; background: #e8ecf5; }
+  .badge.booked { background: #dff3e8; color: var(--ok); }
+  .badge.cancelled { background: #fbe4e4; color: var(--danger); }
+  .link { color: var(--primary); font-size: 14px; }
+  .inline { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .day { min-width: 140px; }
+  #msg { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 10;
+         padding: 10px 18px; border-radius: 8px; color: #fff; max-width: 90%; }
+  #msg.ok { background: var(--ok); }
+  #msg.err { background: var(--danger); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Онлайн-запись</h1>
+  <div id="userbox" class="inline"></div>
+</header>
+<div id="msg" hidden></div>
+<main id="app"></main>
+
+<script>
+// ---------- Настройки ----------
+// Должен совпадать с часовым поясом сервера (переменная TIMEZONE, по умолчанию Asia/Almaty).
+const TZ = 'Asia/Almaty';
+const STATUS = { booked: 'Активна', cancelled: 'Отменена', completed: 'Завершена' };
+// 0 = воскресенье (так считает и сервер), но на экране неделя начинается с понедельника.
+const WEEK = [[1, 'Понедельник'], [2, 'Вторник'], [3, 'Среда'], [4, 'Четверг'],
+              [5, 'Пятница'], [6, 'Суббота'], [0, 'Воскресенье']];
+
+let token = localStorage.getItem('token');
+let me = null; // { user_id, role } — ответ сервера на GET /me
+
+const $ = (id) => document.getElementById(id);
+
+// ---------- Вспомогательные функции ----------
+
+// el() создаёт элемент. Строки-дети добавляются как ТЕКСТ, а не как HTML (защита от XSS).
+function el(tag, props = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(props)) {
+    if (key === 'class') node.className = value;
+    else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+    else node.setAttribute(key, value);
+  }
+  for (const child of children) {
+    if (child != null) node.append(child);
+  }
+  return node;
+}
+
+function showMsg(text, ok = false) {
+  const box = $('msg');
+  box.textContent = text;
+  box.className = ok ? 'ok' : 'err';
+  box.hidden = false;
+  clearTimeout(showMsg.timer);
+  showMsg.timer = setTimeout(() => { box.hidden = true; }, 4000);
+}
+
+const todayStr = () => new Date().toLocaleDateString('sv-SE', { timeZone: TZ }); // ГГГГ-ММ-ДД
+const fmtTime = (iso) => new Date(iso).toLocaleTimeString('ru-RU',
+  { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
+const fmtDateTime = (iso) => new Date(iso).toLocaleString('ru-RU',
+  { timeZone: TZ, day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+
+// api() — единая функция запросов к серверу.
+async function api(method, path, body) {
+  const headers = {};
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  if (body) headers['Content-Type'] = 'application/json';
+
+  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+
+  let data = null;
+  if (res.status !== 204) {
+    try { data = await res.json(); } catch { /* пустой ответ */ }
+  }
+  if (!res.ok) {
+    if (res.status === 401 && token) logout(); // токен просрочен или недействителен
+    throw new Error((data && data.error) || 'Ошибка ' + res.status);
+  }
+  return data;
+}
+
+function logout() {
+  token = null;
+  me = null;
+  localStorage.removeItem('token');
+  renderAuth();
+}
+
+// ---------- Вход и регистрация ----------
+function renderAuth() {
+  $('userbox').replaceChildren();
+
+  const email = el('input', { type: 'email', placeholder: 'Email', required: '' });
+  const password = el('input', { type: 'password', placeholder: 'Пароль (минимум 8 символов)', required: '', minlength: '8' });
+  const name = el('input', { type: 'text', placeholder: 'Ваше имя' });
+  const role = el('select', {},
+    el('option', { value: 'client' }, 'Я клиент'),
+    el('option', { value: 'owner' }, 'Я владелец (оказываю услуги)'));
+  const extra = el('div', { class: 'stack', hidden: '' }, name, role);
+
+  const title = el('h2', {}, 'Вход');
+  const submit = el('button', { type: 'submit' }, 'Войти');
+  const toggle = el('a', { href: '#', class: 'link' }, 'Нет аккаунта? Зарегистрироваться');
+  let registering = false;
+
+  toggle.addEventListener('click', (e) => {
+    e.preventDefault();
+    registering = !registering;
+    extra.hidden = !registering;
+    name.required = registering;
+    title.textContent = registering ? 'Регистрация' : 'Вход';
+    submit.textContent = registering ? 'Зарегистрироваться' : 'Войти';
+    toggle.textContent = registering ? 'Уже есть аккаунт? Войти' : 'Нет аккаунта? Зарегистрироваться';
+  });
+
+  const form = el('form', { class: 'card stack', style: 'max-width:420px;margin:40px auto' },
+    title, email, password, extra, submit, toggle);
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      if (registering) {
+        await api('POST', '/auth/register',
+          { name: name.value, email: email.value, password: password.value, role: role.value });
+      }
+      const res = await api('POST', '/auth/login', { email: email.value, password: password.value });
+      token = res.token;
+      localStorage.setItem('token', token);
+      await init();
+    } catch (err) {
+      showMsg(err.message);
+    }
+  });
+
+  $('app').replaceChildren(form);
+}
+
+function renderUserBox() {
+  const roleName = me.role === 'owner' ? 'Владелец' : 'Клиент';
+  $('userbox').replaceChildren(
+    el('span', { class: 'muted' }, `${roleName} #${me.user_id}`),
+    el('button', { class: 'small', onclick: logout }, 'Выйти'));
+}
+
+// ---------- Карточка со списком записей (общая для клиента и владельца) ----------
+function makeBookingsCard(title, serviceName, isOwner, onChange) {
+  const body = el('div', { class: 'stack' });
+  const card = el('div', { class: 'card' }, el('h2', {}, title), body);
+
+  async function reload() {
+    try {
+      const items = await api('GET', '/bookings');
+      body.replaceChildren();
+      if (items.length === 0) {
+        body.append(el('p', { class: 'muted' }, 'Записей пока нет.'));
+        return;
+      }
+      for (const b of items) {
+        const details = fmtDateTime(b.start_at) + (isOwner ? ` · клиент #${b.client_id}` : '');
+        const row = el('div', { class: 'row' },
+          el('div', {}, el('strong', {}, serviceName(b.service_id)), el('div', { class: 'muted' }, details)),
+          el('span', { class: 'badge ' + b.status }, STATUS[b.status] || b.status));
+        if (b.status === 'booked') {
+          row.append(el('button', { class: 'danger small', onclick: async () => {
+            if (!confirm('Отменить запись?')) return;
+            try {
+              await api('PATCH', `/bookings/${b.id}/cancel`);
+              showMsg('Запись отменена', true);
+            } catch (err) { showMsg(err.message); }
+            await reload();
+            if (onChange) await onChange();
+          } }, 'Отменить'));
+        }
+        body.append(row);
+      }
+    } catch (err) {
+      showMsg(err.message);
+    }
+  }
+  return { card, reload };
+}
+
+// ---------- Экран клиента ----------
+async function renderClient() {
+  const services = await api('GET', '/services');
+  const names = Object.fromEntries(services.map((s) => [s.id, s.name]));
+  let selected = null;
+
+  const slotsBox = el('div', { class: 'slots' });
+  const bookTitle = el('h2', {}, 'Запись');
+  const dateInput = el('input', { type: 'date', min: todayStr() });
+  dateInput.value = todayStr();
+  const bookCard = el('div', { class: 'card' },
+    bookTitle, el('label', { class: 'field' }, 'Дата: ', dateInput), slotsBox);
+  bookCard.hidden = true;
+
+  const bookings = makeBookingsCard('Мои записи', (id) => names[id] || 'Услуга #' + id, false, () => loadSlots());
+
+  async function loadSlots() {
+    slotsBox.replaceChildren();
+    if (!selected || !dateInput.value) return;
+    try {
+      const slots = await api('GET', `/services/${selected.id}/slots?date=${dateInput.value}`);
+      if (slots.length === 0) {
+        slotsBox.append(el('p', { class: 'muted' }, 'На эту дату нет свободного времени.'));
+        return;
+      }
+      for (const s of slots) {
+        slotsBox.append(el('button', { class: 'slot', onclick: () => book(s) }, fmtTime(s.start)));
+      }
+    } catch (err) {
+      showMsg(err.message);
+    }
+  }
+
+  async function book(slot) {
+    if (!confirm(`Записаться на «${selected.name}» — ${fmtDateTime(slot.start)}?`)) return;
+    try {
+      await api('POST', '/bookings', { service_id: selected.id, start_at: slot.start });
+      showMsg('Вы записаны!', true);
+    } catch (err) {
+      showMsg(err.message); // например «это время уже занято» (409)
+    }
+    await loadSlots();
+    await bookings.reload();
+  }
+
+  const grid = el('div', { class: 'grid' });
+  if (services.length === 0) grid.append(el('p', { class: 'muted' }, 'Услуг пока нет.'));
+  for (const s of services) {
+    grid.append(el('div', { class: 'service' },
+      el('strong', {}, s.name),
+      el('div', { class: 'muted' }, `${s.duration_minutes} мин · ${s.price} ₸`),
+      el('button', { onclick: () => {
+        selected = s;
+        bookTitle.textContent = 'Запись: ' + s.name;
+        bookCard.hidden = false;
+        loadSlots();
+        bookCard.scrollIntoView({ behavior: 'smooth' });
+      } }, 'Выбрать')));
+  }
+
+  dateInput.addEventListener('change', loadSlots);
+  $('app').replaceChildren(
+    el('div', { class: 'card' }, el('h2', {}, 'Услуги'), grid), bookCard, bookings.card);
+  await bookings.reload();
+}
+
+// ---------- Экран владельца ----------
+async function renderOwner() {
+  let services = [];
+
+  // --- Услуги ---
+  const svcBody = el('div', { class: 'stack' });
+  async function loadServices() {
+    services = await api('GET', `/services?owner_id=${me.user_id}`);
+    svcBody.replaceChildren();
+    if (services.length === 0) svcBody.append(el('p', { class: 'muted' }, 'Услуг пока нет. Добавьте первую.'));
+    for (const s of services) {
+      svcBody.append(el('div', { class: 'row' },
+        el('div', {}, el('strong', {}, s.name),
+          el('div', { class: 'muted' }, `${s.duration_minutes} мин · ${s.price} ₸`)),
+        el('button', { class: 'danger small', onclick: async () => {
+          if (!confirm(`Удалить услугу «${s.name}»? Её записи тоже удалятся.`)) return;
+          try { await api('DELETE', '/services/' + s.id); await loadServices(); await bookings.reload(); }
+          catch (err) { showMsg(err.message); }
+        } }, 'Удалить')));
+    }
+  }
+
+  const sName = el('input', { type: 'text', placeholder: 'Название (например, Стрижка)', required: '' });
+  const sDur = el('input', { type: 'number', value: '60', min: '5', max: '480', required: '', style: 'width:110px' });
+  const sPrice = el('input', { type: 'number', value: '5000', min: '0', required: '', style: 'width:110px' });
+  const addForm = el('form', { class: 'inline' }, sName,
+    el('label', {}, 'Минут: ', sDur), el('label', {}, 'Цена ₸: ', sPrice), el('button', { type: 'submit' }, 'Добавить'));
+  addForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api('POST', '/services',
+        { name: sName.value, duration_minutes: Number(sDur.value), price: Number(sPrice.value) });
+      sName.value = '';
+      showMsg('Услуга добавлена', true);
+      await loadServices();
+    } catch (err) { showMsg(err.message); }
+  });
+
+  // --- График работы ---
+  const rows = {}; // номер дня недели -> { on, start, end }
+  const hoursBody = el('div', { class: 'stack' });
+  for (const [wd, label] of WEEK) {
+    const on = el('input', { type: 'checkbox' });
+    const start = el('input', { type: 'time', value: '09:00' });
+    const end = el('input', { type: 'time', value: '18:00' });
+    rows[wd] = { on, start, end };
+    hoursBody.append(el('div', { class: 'inline' }, el('label', { class: 'day' }, on, ' ' + label), start, '—', end));
+  }
+  for (const h of await api('GET', '/working-hours')) {
+    rows[h.weekday].on.checked = true;
+    rows[h.weekday].start.value = h.start_time;
+    rows[h.weekday].end.value = h.end_time;
+  }
+  const saveHours = el('button', { onclick: async () => {
+    const hours = WEEK.filter(([wd]) => rows[wd].on.checked).map(([wd]) =>
+      ({ weekday: wd, start_time: rows[wd].start.value, end_time: rows[wd].end.value }));
+    try { await api('PUT', '/working-hours', { hours }); showMsg('График сохранён', true); }
+    catch (err) { showMsg(err.message); }
+  } }, 'Сохранить график');
+
+  // --- Записи клиентов ---
+  const bookings = makeBookingsCard('Записи на мои услуги',
+    (id) => (services.find((s) => s.id === id) || {}).name || 'Услуга #' + id, true);
+
+  $('app').replaceChildren(
+    el('div', { class: 'card' }, el('h2', {}, 'Мои услуги'), svcBody, el('hr'), addForm),
+    el('div', { class: 'card' }, el('h2', {}, 'График работы'), hoursBody, saveHours),
+    bookings.card);
+  await loadServices();
+  await bookings.reload();
+}
+
+// ---------- Запуск ----------
+async function init() {
+  $('msg').hidden = true;
+  if (!token) return renderAuth();
+  try {
+    me = await api('GET', '/me');
+    renderUserBox();
+    if (me.role === 'owner') await renderOwner();
+    else await renderClient();
+  } catch (err) {
+    showMsg(err.message);
+  }
+}
+init();
+</script>
+</body>
+</html>

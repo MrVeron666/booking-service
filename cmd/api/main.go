@@ -3,6 +3,8 @@ package main
 
 import (
 	"context"
+	"embed"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,6 +19,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// Файлы фронтенда вшиваются в программу при сборке.
+//
+//go:embed static
+var staticFiles embed.FS
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -112,6 +119,14 @@ func main() {
 			r.Put("/working-hours", catalogHandler.SetWorkingHours)
 		})
 	})
+
+	// Всё остальное — страница фронтенда (главная страница index.html).
+	staticFS, err := fs.Sub(staticFiles, "static")
+	if err != nil {
+		slog.Error("не удалось открыть встроенные файлы", "err", err)
+		os.Exit(1)
+	}
+	router.Handle("/*", http.FileServer(http.FS(staticFS)))
 
 	slog.Info("сервер запускается", "addr", cfg.HTTPAddr)
 	err = http.ListenAndServe(cfg.HTTPAddr, router)
