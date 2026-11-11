@@ -51,6 +51,11 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("подключение к PostgreSQL установлено")
+	if err := runMigrations(cfg.DatabaseURL); err != nil {
+		slog.Error("не удалось применить миграции", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("миграции применены")
 
 	// Секрет для подписи JWT-токенов берём из переменной окружения.
 	jwtSecret := os.Getenv("JWT_SECRET")

@@ -1,0 +1,361 @@
+openapi: 3.0.3
+info:
+  title: Booking Service API
+  description: >
+    REST API сервиса онлайн-записи клиентов для малого бизнеса.
+    Двойная бронь одного времени невозможна: пересечение записей запрещает
+    ограничение EXCLUDE в PostgreSQL, а сервис превращает его в ответ 409.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+tags:
+  - name: auth
+  - name: services
+  - name: bookings
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+    User:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        email: { type: string }
+        role: { type: string, enum: [owner, client] }
+        created_at: { type: string, format: date-time }
+    Service:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        owner_id: { type: integer, format: int64 }
+        name: { type: string }
+        duration_minutes: { type: integer }
+        price: { type: number }
+        created_at: { type: string, format: date-time }
+    ServiceInput:
+      type: object
+      required: [name, duration_minutes, price]
+      properties:
+        name: { type: string, example: Стрижка }
+        duration_minutes: { type: integer, minimum: 5, maximum: 480, example: 60 }
+        price: { type: number, minimum: 0, example: 5000 }
+    WorkingHour:
+      type: object
+      properties:
+        weekday: { type: integer, minimum: 0, maximum: 6, description: "0 = воскресенье" }
+        start_time: { type: string, example: "09:00" }
+        end_time: { type: string, example: "18:00" }
+    Slot:
+      type: object
+      properties:
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+    Booking:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        service_id: { type: integer, format: int64 }
+        owner_id: { type: integer, format: int64 }
+        client_id: { type: integer, format: int64 }
+        start_at: { type: string, format: date-time }
+        end_at: { type: string, format: date-time }
+        status: { type: string, enum: [booked, cancelled, completed] }
+        created_at: { type: string, format: date-time }
+  responses:
+    BadRequest:
+      description: Некорректные данные
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Нет токена или он недействителен
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Недостаточно прав для этой роли
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Объект не найден
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+paths:
+  /health:
+    get:
+      summary: Проверка работоспособности сервиса и базы
+      responses:
+        "200": { description: Сервис и база доступны }
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Регистрация
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password, role]
+              properties:
+                name: { type: string }
+                email: { type: string }
+                password: { type: string, minLength: 8 }
+                role: { type: string, enum: [owner, client] }
+      responses:
+        "201":
+          description: Пользователь создан
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { description: Email уже зарегистрирован }
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Вход, возвращает JWT-токен (действует 24 часа)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: Токен
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /me:
+    get:
+      tags: [auth]
+      summary: Кто сейчас авторизован
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Данные из токена
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user_id: { type: integer }
+                  role: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /services:
+    get:
+      tags: [services]
+      summary: Список услуг (любая роль)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: owner_id
+          in: query
+          required: false
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Список услуг
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Service" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [services]
+      summary: Создать услугу (только owner)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ServiceInput" }
+      responses:
+        "201":
+          description: Услуга создана
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Service" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /services/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer }
+    get:
+      tags: [services]
+      summary: Получить услугу (любая роль)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Услуга
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Service" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [services]
+      summary: Изменить свою услугу (только owner)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ServiceInput" }
+      responses:
+        "200":
+          description: Услуга обновлена
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Service" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [services]
+      summary: Удалить свою услугу (только owner)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: Удалено }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /services/{id}/slots:
+    get:
+      tags: [bookings]
+      summary: Свободные слоты услуги на дату
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: date
+          in: query
+          required: true
+          schema: { type: string, format: date, example: "2026-11-16" }
+      responses:
+        "200":
+          description: Список слотов (пустой, если выходной)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Slot" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /working-hours:
+    get:
+      tags: [services]
+      summary: Мой график работы (только owner)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: График
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/WorkingHour" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    put:
+      tags: [services]
+      summary: Заменить мой график работы (только owner)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                hours:
+                  type: array
+                  items: { $ref: "#/components/schemas/WorkingHour" }
+      responses:
+        "200":
+          description: Сохранённый график
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/WorkingHour" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /bookings:
+    get:
+      tags: [bookings]
+      summary: Мои записи (клиент) или записи на мои услуги (owner)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Список записей
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Booking" }
+    post:
+      tags: [bookings]
+      summary: Создать запись (только client)
+      description: >
+        Если время уже занято, ответ 409. Проверка выполняется ограничением
+        в базе данных, поэтому она безопасна при одновременных запросах.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [service_id, start_at]
+              properties:
+                service_id: { type: integer }
+                start_at: { type: string, format: date-time, example: "2026-11-16T10:00:00+05:00" }
+      responses:
+        "201":
+          description: Запись создана
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Booking" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Это время уже занято }
+  /bookings/{id}/cancel:
+    patch:
+      tags: [bookings]
+      summary: Отменить запись (клиентом или владельцем услуги)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Запись отменена
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Booking" }
+        "404": { $ref: "#/components/responses/NotFound" }
