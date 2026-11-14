@@ -11,6 +11,19 @@ import (
 
 var ErrBookingTime = errors.New("время вне рабочих часов, в прошлом или не совпадает с сеткой слотов")
 
+// Notifier получает события о записях (его реализует Telegram-бот).
+// Интерфейс объявлен здесь, чтобы сервис не зависел от Telegram.
+type Notifier interface {
+	BookingCreated(b *model.Booking)
+	BookingCancelled(b *model.Booking, byUserID int64)
+}
+
+// noopNotifier ничего не делает: используется, пока бот не подключён.
+type noopNotifier struct{}
+
+func (noopNotifier) BookingCreated(*model.Booking)          {}
+func (noopNotifier) BookingCancelled(*model.Booking, int64) {}
+
 // BookingService — слоты и записи.
 type BookingService struct {
 	services *repository.ServiceRepository
@@ -18,6 +31,7 @@ type BookingService struct {
 	bookings *repository.BookingRepository
 	loc      *time.Location   // часовой пояс бизнеса
 	now      func() time.Time // "текущее время" как поле, чтобы подменять его в тестах
+	notifier Notifier
 }
 
 func NewBookingService(
@@ -26,8 +40,14 @@ func NewBookingService(
 	bookings *repository.BookingRepository,
 	loc *time.Location,
 ) *BookingService {
-	return &BookingService{services: services, hours: hours, bookings: bookings, loc: loc, now: time.Now}
+	return &BookingService{
+		services: services, hours: hours, bookings: bookings,
+		loc: loc, now: time.Now, notifier: noopNotifier{},
+	}
 }
+
+// SetNotifier подключает получателя уведомлений (например, Telegram-бота).
+func (s *BookingService) SetNotifier(n Notifier) { s.notifier = n }
 
 // clockOnDay склеивает дату из day и время "09:00" в часовом поясе loc.
 func clockOnDay(day time.Time, clock string, loc *time.Location) (time.Time, error) {
@@ -120,6 +140,7 @@ func (s *BookingService) CreateBooking(ctx context.Context, clientID, serviceID 
 	if err := s.bookings.Create(ctx, b); err != nil {
 		return nil, err
 	}
+	s.notifier.BookingCreated(b) // сообщаем владельцу (в Telegram, если он подключён)
 	return b, nil
 }
 
@@ -128,5 +149,10 @@ func (s *BookingService) ListBookings(ctx context.Context, userID int64, role st
 }
 
 func (s *BookingService) CancelBooking(ctx context.Context, bookingID, userID int64) (*model.Booking, error) {
-	return s.bookings.Cancel(ctx, bookingID, userID)
+	b, err := s.bookings.Cancel(ctx, bookingID, userID)
+	if err != nil {
+		return nil, err
+	}
+	s.notifier.BookingCancelled(b, userID) // сообщаем второй стороне
+	return b, nil
 }

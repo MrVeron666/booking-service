@@ -16,6 +16,7 @@ import (
 	"github.com/bogdan/booking-service/internal/middleware"
 	"github.com/bogdan/booking-service/internal/repository"
 	"github.com/bogdan/booking-service/internal/service"
+	"github.com/bogdan/booking-service/internal/telegram"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -51,6 +52,7 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("подключение к PostgreSQL установлено")
+
 	if err := runMigrations(cfg.DatabaseURL); err != nil {
 		slog.Error("не удалось применить миграции", "err", err)
 		os.Exit(1)
@@ -89,6 +91,24 @@ func main() {
 	bookingService := service.NewBookingService(serviceRepo, hoursRepo, bookingRepo, loc)
 	bookingHandler := handler.NewBookingHandler(bookingService)
 
+	// Telegram-бот необязателен: без токена (или если Telegram недоступен) всё остальное работает.
+	telegramRepo := repository.NewTelegramRepository(pool)
+	botUsername := ""
+	if token := os.Getenv("TELEGRAM_BOT_TOKEN"); token != "" {
+		bot, err := telegram.New(token, telegramRepo, bookingRepo, serviceRepo, loc)
+		if err != nil {
+			slog.Warn("Telegram-бот не запущен", "err", err)
+		} else {
+			botUsername = bot.Username()
+			bookingService.SetNotifier(bot) // события записей теперь идут в бота
+			go bot.Run(context.Background())
+		}
+	} else {
+		slog.Info("TELEGRAM_BOT_TOKEN не задан: Telegram-бот отключён")
+	}
+	telegramService := service.NewTelegramService(telegramRepo, botUsername)
+	telegramHandler := handler.NewTelegramHandler(telegramService)
+
 	router := chi.NewRouter()
 	router.Get("/health", handler.HealthHandler{Pool: pool}.ServeHTTP)
 
@@ -100,6 +120,10 @@ func main() {
 	router.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(authService))
 		r.Get("/me", authHandler.Me)
+
+		// Подключение Telegram доступно любой роли.
+		r.Get("/telegram/status", telegramHandler.Status)
+		r.Post("/telegram/link", telegramHandler.CreateLink)
 
 		// Просмотр услуг, слотов и своих записей доступен любой роли.
 		r.Get("/services", catalogHandler.ListServices)

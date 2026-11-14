@@ -363,6 +363,49 @@ async function renderOwner() {
   await bookings.reload();
 }
 
+// ---------- Подключение Telegram ----------
+// Возвращает карточку или null, если бот не настроен на сервере.
+// ---------- Подключение Telegram ----------
+// Возвращает карточку или null, если бот не настроен на сервере.
+async function makeTelegramCard() {
+  let status;
+  try { status = await api('GET', '/telegram/status'); } catch { return null; }
+  if (!status.enabled) return null;
+
+  const body = el('div', { class: 'stack' });
+  const card = el('div', { class: 'card' }, el('h2', {}, 'Уведомления в Telegram'), body);
+
+  function show() {
+    body.replaceChildren();
+    if (status.linked) {
+      body.append(el('p', {}, 'Telegram подключён: напоминания и уведомления приходят в бота.'));
+      return;
+    }
+    body.append(
+      el('p', { class: 'muted' }, 'Подключите бота, чтобы получать напоминания за сутки до визита.'),
+      el('button', { onclick: connect }, 'Подключить Telegram'));
+  }
+
+  async function connect() {
+    try {
+      const res = await api('POST', '/telegram/link');
+      body.replaceChildren(
+        el('p', {}, 'Откройте ссылку и нажмите «Запустить» (Start) в Telegram:'),
+        el('a', { href: res.link, target: '_blank', rel: 'noopener', class: 'link' }, res.link),
+        el('p', { class: 'muted' }, `Или отправьте боту: /start ${res.code} (код действует ${res.expires_in_minutes} минут).`),
+        el('button', { class: 'small', onclick: refresh }, 'Я подключил — обновить статус'));
+    } catch (err) { showMsg(err.message); }
+  }
+
+  async function refresh() {
+    try { status = await api('GET', '/telegram/status'); show(); }
+    catch (err) { showMsg(err.message); }
+  }
+
+  show();
+  return card;
+}
+
 // ---------- Запуск ----------
 async function init() {
   $('msg').hidden = true;
@@ -372,6 +415,10 @@ async function init() {
     renderUserBox();
     if (me.role === 'owner') await renderOwner();
     else await renderClient();
+
+    // Карточка Telegram показывается вверху страницы, если бот настроен на сервере.
+    const tg = await makeTelegramCard();
+    if (tg) $('app').prepend(tg);
   } catch (err) {
     showMsg(err.message);
   }
