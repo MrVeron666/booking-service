@@ -1,0 +1,96 @@
+/* BookingFlow — premium UI layer. Подключается поверх существующего index.html */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+:root{
+  --bg:#f5f6fb;--card:#fff;--text:#172033;--muted:#778198;
+  --primary:#6d5dfc;--primary-dark:#5546e8;--danger:#ef476f;--ok:#12b886;
+  --border:#e8eaf3;--shadow:0 12px 35px rgba(31,35,90,.07);
+}
+*{box-sizing:border-box}
+body{
+  font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
+  background:radial-gradient(ellipse at 10% 0%,#ecebff 0,transparent 35%),var(--bg);
+  color:var(--text);line-height:1.55;min-height:100vh
+}
+header{
+  position:sticky;top:0;z-index:5;background:rgba(255,255,255,.82);
+  backdrop-filter:blur(18px);border-bottom:1px solid rgba(225,228,241,.8);
+  padding:18px clamp(18px,5vw,64px);box-shadow:0 4px 20px rgba(30,35,80,.025)
+}
+header h1{font-size:20px;font-weight:800;letter-spacing:-.7px;display:flex;align-items:center;gap:10px}
+header h1:before{
+  content:"B";display:grid;place-items:center;width:36px;height:36px;border-radius:12px;
+  color:white;background:linear-gradient(135deg,#8b7bff,#5c4be8);box-shadow:0 7px 15px #7565ee45;font-size:17px
+}
+main{max-width:1120px;margin:36px auto;padding:0 22px 60px}
+#app{animation:appear .35s ease both}
+@keyframes appear{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.card{
+  background:rgba(255,255,255,.92);border:1px solid #e9eaf4;border-radius:22px;
+  padding:26px;margin-bottom:22px;box-shadow:var(--shadow);transition:box-shadow .2s,border-color .2s
+}
+.card h2{font-size:19px;font-weight:750;letter-spacing:-.45px;margin:0 0 20px}
+.muted{color:var(--muted);font-size:14px}
+.stack{gap:14px}
+.row{padding:15px 0;border-bottom:1px solid #eff0f6;gap:14px}
+.grid{grid-template-columns:repeat(auto-fill,minmax(235px,1fr));gap:16px}
+.service{
+  border:1px solid #e9eaf4;border-radius:18px;padding:20px;gap:10px;
+  background:linear-gradient(145deg,#fff,#fafaff);transition:transform .2s,box-shadow .2s,border-color .2s
+}
+.service:hover{transform:translateY(-4px);border-color:#c9c3ff;box-shadow:0 15px 30px #6558d91a}
+.service strong{font-size:17px;font-weight:700}
+.service .muted{margin-bottom:8px}
+input,select{
+  padding:12px 14px;border:1px solid #e2e5ef;border-radius:12px;background:#fff;
+  font:inherit;color:var(--text);outline:none;transition:border .2s,box-shadow .2s
+}
+input:focus,select:focus{border-color:#8b7cff;box-shadow:0 0 0 4px #7868ff17}
+input[type=checkbox]{accent-color:var(--primary);width:17px;height:17px}
+button{
+  padding:11px 17px;border:0;border-radius:12px;background:linear-gradient(135deg,#7b6bff,#5d4be8);
+  color:#fff;font:600 14px Inter,sans-serif;cursor:pointer;
+  box-shadow:0 7px 16px #6c5cfb24;transition:transform .18s,box-shadow .18s,filter .18s
+}
+button:hover{background:linear-gradient(135deg,#6e5cf3,#5140d7);transform:translateY(-1px);box-shadow:0 10px 20px #6c5cfb35}
+button:active{transform:translateY(0)}
+button.danger{background:#fff0f3;color:#d92d57;box-shadow:none;border:1px solid #ffd7e0}
+button.danger:hover{background:#ffe3e9}
+button.small{padding:8px 12px;font-size:12px;border-radius:10px}
+button.slot{background:#f6f5ff;color:#6554ec;border:1px solid #e1ddff;box-shadow:none}
+button.slot:hover{background:#6d5dfc;color:#fff;border-color:#6d5dfc}
+.badge{font-size:12px;font-weight:650;padding:6px 11px;border-radius:99px;background:#f0f1f7;color:#6d7488}
+.badge.booked{background:#e4fbf1;color:#07865b}
+.badge.cancelled{background:#fff0f2;color:#d92d57}
+.badge.completed{background:#eaf0ff;color:#4f65d9}
+.link{color:#6554ec;font-weight:600;text-decoration:none}
+.link:hover{text-decoration:underline}
+.inline{gap:10px}
+.day{min-width:155px;font-weight:600}
+hr{border:0;border-top:1px solid var(--border);margin:22px 0}
+#msg{
+  top:22px;padding:13px 20px;border-radius:14px;font-size:14px;font-weight:600;
+  box-shadow:0 15px 35px #10152a25;backdrop-filter:blur(12px)
+}
+#msg.ok{background:#12b886;color:#fff}
+#msg.err{background:#ef476f;color:#fff}
+/* Login form / registration */
+form.card{max-width:470px!important;margin:55px auto!important;padding:36px!important}
+form.card h2{font-size:28px;margin-bottom:8px}
+form.card input,form.card select{width:100%;min-height:48px}
+form.card button[type=submit]{min-height:48px;margin-top:5px}
+form.card .link{display:inline-block;text-align:center;margin-top:5px}
+/* Booking date and slot area */
+#app input[type=date]{min-width:190px}
+#app .slots{padding-top:8px}
+#app .slots button{min-width:82px}
+@media(max-width:640px){
+  header{padding:14px 16px;align-items:flex-start;flex-direction:column}
+  header h1{font-size:18px}
+  main{margin:22px auto;padding:0 13px 40px}
+  .card{padding:19px;border-radius:17px}
+  .grid{grid-template-columns:1fr}
+  .row{align-items:flex-start}
+  form.card{margin:25px auto!important;padding:24px!important}
+  .day{min-width:100%}
+}
