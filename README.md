@@ -1,38 +1,45 @@
 # Booking Service
 
-[![CI](https://github.com/ТВОЙ_ЛОГИН/booking-service/actions/workflows/ci.yml/badge.svg)](https://github.com/ТВОЙ_ЛОГИН/booking-service/actions/workflows/ci.yml)
+[![CI](https://github.com/MrVeron666/booking-service/actions/workflows/ci.yml/badge.svg)](https://github.com/MrVeron666/booking-service/actions/workflows/ci.yml)
 
 Веб-сервис онлайн-записи клиентов для малого бизнеса (салон, барбершоп, автосервис, репетитор).
-Дипломный проект: backend на Go + веб-интерфейс.
+Дипломный проект: backend на Go, веб-интерфейс и Telegram-бот.
+
+**Демо:** https://booking-service-73rd.onrender.com
+(бесплатный хостинг: если сайт давно не открывали, первая загрузка может занять до минуты)
 
 **Главная особенность:** двойная бронь одного времени невозможна даже при одновременных запросах.
 Пересечение интервалов запрещает ограничение `EXCLUDE USING gist` в PostgreSQL,
-а тест из 50 параллельных запросов на один слот подтверждает, что успешным будет ровно один.
+а интеграционный тест из 50 параллельных запросов на один слот подтверждает, что успешным будет ровно один.
 
 ## Возможности
 
-- Регистрация и вход (JWT), роли: владелец (`owner`) и клиент (`client`).
-- Владелец: управляет услугами, задаёт недельный график, видит записи на свои услуги.
+- Регистрация и вход (JWT), две роли: владелец (`owner`) и клиент (`client`).
+- Владелец: управляет услугами, задаёт недельный график работы, видит записи на свои услуги.
 - Клиент: выбирает услугу и дату, видит свободные слоты, записывается и отменяет запись.
 - Слоты считаются из рабочих часов и длительности услуги, прошедшее время недоступно.
+- Telegram-бот: привязка аккаунта по одноразовому коду, напоминание клиенту за 24 часа до визита,
+  уведомления владельцу о новых записях и обеим сторонам об отменах, команды `/bookings` и `/unlink`.
 - Веб-интерфейс встроен в сервер (`go:embed`), отдельно запускать ничего не нужно.
 
 ## Технологии
 
-Go, chi (роутер), PostgreSQL, pgx, golang-migrate, JWT, bcrypt, Docker Compose,
-testify, GitHub Actions, HTML/CSS/JavaScript (без фреймворков).
+Go, chi (роутер), PostgreSQL, pgx, golang-migrate, JWT, bcrypt, Telegram Bot API,
+Docker Compose, testify, GitHub Actions, HTML/CSS/JavaScript (без фреймворков).
+Деплой: Render (сервер) + Neon (PostgreSQL).
 
 ## Быстрый старт
 
 Нужны Docker Desktop и Git.
 
 ```bash
-git clone https://github.com/ТВОЙ_ЛОГИН/booking-service.git
+git clone https://github.com/MrVeron666/booking-service.git
 cd booking-service
 cp .env.example .env
 ```
 
 Открой `.env` и задай `JWT_SECRET` (случайная строка от 16 символов, например результат `openssl rand -hex 32`).
+`TELEGRAM_BOT_TOKEN` можно оставить пустым: без него бот отключён, остальное работает.
 
 ```bash
 docker compose up --build
@@ -41,6 +48,15 @@ docker compose up --build
 Миграции применяются автоматически. Открой http://localhost:8080:
 зарегистрируйся как владелец, добавь услугу и график, затем в другом окне (режим инкогнито)
 зарегистрируйся как клиент и запишись.
+
+## Telegram-бот (необязательно)
+
+1. Создай бота у [@BotFather](https://t.me/BotFather) командой `/newbot` и получи токен.
+2. Запиши токен в `.env`: `TELEGRAM_BOT_TOKEN=...` и перезапусти `docker compose up --build`.
+3. Войди на сайте, в блоке «Уведомления в Telegram» нажми «Подключить Telegram» и открой ссылку.
+
+Один токен бота нельзя запускать одновременно в двух местах (локально и в облаке),
+иначе Telegram вернёт ошибку `Conflict: terminated by other getUpdates request`.
 
 ## Тесты
 
@@ -56,19 +72,26 @@ go test ./internal/service/ -v
 DATABASE_URL="postgres://booking:booking@localhost:5432/booking?sslmode=disable" go test ./... -count=1
 ```
 
+Без `DATABASE_URL` интеграционные тесты пропускаются. В GitHub Actions они запускаются автоматически
+с настоящей PostgreSQL при каждом коммите.
+
 ## Архитектура
 
 ```
-cmd/api            точка входа, сборка зависимостей, раздача фронтенда
-internal/handler   HTTP: разбор запросов и ответы
-internal/service   бизнес-логика (слоты, правила записи, авторизация)
-internal/repository SQL-запросы к PostgreSQL
-internal/middleware проверка JWT и роли
-internal/model     структуры данных
-migrations         SQL-миграции (применяются при старте)
+cmd/api              точка входа, миграции, сборка зависимостей, раздача фронтенда
+internal/handler     HTTP: разбор запросов и ответы
+internal/service     бизнес-логика (слоты, правила записи, авторизация)
+internal/repository  SQL-запросы к PostgreSQL
+internal/middleware  проверка JWT и роли
+internal/model       структуры данных
+internal/telegram    Telegram-бот: команды, уведомления, напоминания
+migrations           SQL-миграции (применяются при старте)
 ```
 
-Схемы (ER-диаграмма, диаграмма вариантов использования, последовательность записи)
+Слои зависят только от нижних: handler → service → repository. Сервис не знает про Telegram:
+события записей уходят через интерфейс `Notifier`, который реализует бот.
+
+Схемы (ER-диаграмма, варианты использования, архитектура, последовательность записи)
 лежат в [docs/DIAGRAMS.md](docs/DIAGRAMS.md).
 
 ## API
@@ -80,13 +103,15 @@ migrations         SQL-миграции (применяются при стар�
 | POST | /auth/register | все | регистрация |
 | POST | /auth/login | все | вход, выдача токена |
 | GET | /me | авторизованные | кто я |
+| GET | /telegram/status | авторизованные | подключён ли Telegram |
+| POST | /telegram/link | авторизованные | код привязки Telegram (действует 15 минут) |
 | GET | /services | авторизованные | список услуг |
 | GET | /services/{id} | авторизованные | одна услуга |
 | POST | /services | owner | создать услугу |
 | PUT | /services/{id} | owner | изменить свою услугу |
 | DELETE | /services/{id} | owner | удалить свою услугу |
 | GET, PUT | /working-hours | owner | график работы |
-| GET | /services/{id}/slots?date= | авторизованные | свободные слоты |
+| GET | /services/{id}/slots?date= | авторизованные | свободные слоты на дату |
 | POST | /bookings | client | создать запись (409, если время занято) |
 | GET | /bookings | авторизованные | мои записи / записи на мои услуги |
 | PATCH | /bookings/{id}/cancel | участник записи | отменить запись |
@@ -99,3 +124,17 @@ migrations         SQL-миграции (применяются при стар�
 | `HTTP_ADDR` | адрес сервера, по умолчанию `:8080` |
 | `JWT_SECRET` | секрет подписи токенов (минимум 16 символов) |
 | `TIMEZONE` | часовой пояс бизнеса, по умолчанию `Asia/Almaty` |
+| `TELEGRAM_BOT_TOKEN` | токен бота от @BotFather (необязательно, без него бот отключён) |
+
+## Деплой
+
+Демо развёрнуто на бесплатных тарифах: сервер на [Render](https://render.com) (Docker, регион Frankfurt),
+база на [Neon](https://neon.tech). Для Render заданы переменные `DATABASE_URL` (прямая строка Neon
+с `sslmode=require`), `JWT_SECRET` и `HTTP_ADDR=:10000`. Миграции применяются при старте приложения.
+Чтобы бесплатный сервер не засыпал, главную страницу опрашивает UptimeRobot каждые 5 минут.
+
+## Известные ограничения
+
+- Регистрация открыта для всех, ролей владельца и клиента достаточно для демонстрации, но нет подтверждения email и сброса пароля.
+- Деньги хранятся как число с плавающей точкой (для учебного проекта допустимо, в бухгалтерии нужно хранить в копейках).
+- Бот через бесплатный хостинг работает, только пока сервер не спит.
